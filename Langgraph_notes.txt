@@ -1,0 +1,209 @@
+LangGraph is a graph-based orchestration framework for building stateful LLM and agent applications. We define a shared state, represent individual operations as nodes, and connect those nodes using edges. Conditional edges allow dynamic routing and loops. It is particularly useful for agentic applications involving tool calling, RAG, multi-agent workflows, human-in-the-loop, retries, and persistent execution. LangChain provides many of the underlying LLM and tool components, while LangGraph manages the workflow and stateful orchestration
+
+                    USER
+                     ↓
+                    API
+                     ↓
+              ┌──────────────┐
+              │  LANGGRAPH   │
+              └──────┬───────┘
+                     ↓
+                   STATE
+                     ↓
+               ┌───────────┐
+               │   AGENT   │
+               └─────┬─────┘
+                     ↓
+                 DECISION
+               ↙     ↓      ↘
+            RAG     TOOL    HUMAN
+             ↓       ↓        ↓
+          Vector    API     Approval
+             ↓       ↓        ↓
+               └─────┬───────┘
+                     ↓
+                  VALIDATE
+                     ↓
+                 ┌───┴───┐
+                 ↓       ↓
+               PASS     FAIL
+                 ↓       ↓
+                END    RETRY
+                         │
+                         └────→ AGENT
+
+State
+
+Shared information passed through graph execution.
+
+Node
+
+A unit of computation.
+
+Edge
+
+Defines transition between nodes.
+
+Conditional Edge
+
+Determines next node based on state/output.
+
+START
+
+Entry point.
+
+END
+
+Termination point.
+
+Graph
+
+Collection of nodes + edges + state definition.
+
+Checkpoint
+
+Persisted graph state used for recovery/resumption.
+
+Thread
+
+Logical execution/conversation context.
+
+Tool
+
+External capability available to the agent.
+
+Human-in-the-loop
+
+Pause execution for human decision/approval.
+
+Reducer
+
+Mechanism for combining updates when multiple graph paths modify the same state field.
+
+| LangChain                                | LangGraph                               |
+| ---------------------------------------- | --------------------------------------- |
+| Framework/ecosystem for LLM applications | Graph orchestration framework           |
+| Excellent for chains and components      | Excellent for stateful workflows/agents |
+| Often linear                             | Graph-based                             |
+| Sequential workflows                     | Branching + loops                       |
+| Tools, retrievers, prompts, models       | Orchestrates these components           |
+| Simpler applications                     | Complex agentic applications            |
+| Less explicit state orchestration        | Explicit shared state                   |
+
+State = what the graph knows during execution.
+v/s
+Persistence/memory = what can be retained beyond an individual execution.
+
+LangGraph End-to-End Architecture
+
+For an enterprise GenAI application, you can think about the architecture in layers.
+
+                  USER
+                   │
+                   ↓
+            ┌─────────────┐
+            │ API / UI     │
+            │ FastAPI      │
+            └──────┬──────┘
+                   ↓
+          ┌──────────────────┐
+          │ LangGraph        │
+          │ Orchestrator     │
+          └────────┬─────────┘
+                   ↓
+             ┌───────────┐
+             │   State   │
+             └─────┬─────┘
+                   │
+       ┌───────────┼───────────┐
+       ↓           ↓           ↓
+    Agent       Retriever     Router
+       │           │           │
+       ↓           ↓           ↓
+     Tools     Vector DB    Decision
+       │           │
+       ↓           ↓
+ External APIs  Documents
+       │
+       └───────────┐
+                   ↓
+                  LLM
+                   ↓
+             Validation
+                   ↓
+             Human Review
+                   ↓
+               Response
+
+
+Graph API gives explicit control over the workflow by defining nodes, edges, and state
+Functional API allows us to use normal Python control flow to define the workflow, making it simpler when an explicit graph structure isn't necessary
+
+| Feature           | Graph API            | Functional API           |
+| ----------------- | -------------------- | ------------------------ |
+| Workflow style    | Explicit graph       | Python control flow      |
+| Nodes/edges       | Explicitly defined   | Implicit                 |
+| State             | Explicit             | Managed through workflow |
+| Complex branching | Excellent            | Good                     |
+| Loops             | Explicit graph edges | Normal Python loops      |
+| Multi-agent       | Excellent            | Possible                 |
+| Visualization     | Easier               | Less explicit            |
+| Best for          | Complex workflows    | Simple/linear workflows  |
+
+
+The Graph API explicitly defines the workflow using state, nodes, and edges, so it's ideal for complex agentic workflows with branching, loops, and multiple agents. The Functional API allows us to define the workflow using normal Python control flow such as function calls, if-else, and loops. So I would use Graph API when I need explicit graph-level control and Functional API when the workflow is simpler and Python control flow is sufficient
+
+Use Graph API when you have:
+
+Multiple agents
+      +
+Complex routing
+      +
+Many branches
+      +
+Loops
+      +
+Human approval
+      +
+Complex state
+
+
+
+Use Functional API when:
+
+Simple workflow
+      +
+Normal Python logic
+      +
+if/else
+      +
+for/while loops
+
+In LangGraph, reducers are functions that define how state updates from multiple nodes are merged, preventing data loss by controlling whether values are overwritten, appended, or custom-aggregated.
+These functions are critical for parallel execution and multi-agent systems, ensuring that concurrent writes to the same state key are combined deterministically rather than randomly.
+
+Create a Search Tool: Creates a web-search tool.
+The LLM can use this tool when it needs external/current information.
+Create a Custom Tool:  (Docstring) This is a normal Python function that becomes a tool available to the LLM.
+It allows the model to perform an actual calculation instead of relying on its own generated reasoning.
+Create Tool List
+Bind Tools to the LLM: These tools are available and can be called when necessary.
+tools_condition checks the latest LLM message.
+Tool Calling Node: The LLM receives the conversation and decides whether it needs a tool.
+ToolNode: is a prebuilt LangGraph node that actually executes the requested tools.
+
+ReAct Agent Architecture:
+Why it came:
+raw LLM on its own is fundamentally limited: it can think, but it cannot act; it can generate reasoning, but it lacks persistent state and structured control over execution.
+This gap is where AI agents emerge—and among agentic patterns, ReAct (Reason + Act) has become one of the most influential.
+Reason → Act → Observe → Repeat
+Instead of forcing the LLM to answer everything directly, we allow it to:
+
+1. Reason about what it knows and what it needs 
+2. Act by invoking tools (search, APIs, databases, calculators) 
+3. Observe the result of those actions 
+4. Refine its reasoning based on new information
+
+MemorySaver stores graph checkpoints in memory (checkpoint-based state persistence)
+thread_id identifies a conversation/session.
+thread_id provides conversation/session identity, while the checkpointer stores the state associated with that thread.
