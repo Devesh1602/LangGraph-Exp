@@ -207,3 +207,13 @@ Instead of forcing the LLM to answer everything directly, we allow it to:
 MemorySaver stores graph checkpoints in memory (checkpoint-based state persistence)
 thread_id identifies a conversation/session.
 thread_id provides conversation/session identity, while the checkpointer stores the state associated with that thread.
+
+
+Short-term memory is thread-scoped and managed by checkpointers (e.g., InMemorySaver, PostgresSaver).  It persists the entire graph state—including message history and intermediate variables—after each step within a specific thread. This allows the agent to recall previous messages in the same conversation, but the memory is lost if the thread ends or if a new thread_id is used. 
+
+Long-term memory is cross-thread and managed by stores (e.g., InMemoryStore, PostgresStore).  It allows the agent to remember user preferences, facts, or learned habits across different conversations and sessions. Data in the store is organized by namespaces (like user IDs) and can be queried or updated by nodes, enabling personalized context that persists beyond the life of a single thread. 
+
+stream() allows you to receive graph execution results incrementally rather than waiting for the complete execution.
+stream_mode="updates" Returns state updates produced by each node.
+stream_mode="values" Streams the full graph state after each node executes.
+astream_events() provides asynchronous event-level streaming. Useful when building applications that need detailed real-time execution events.

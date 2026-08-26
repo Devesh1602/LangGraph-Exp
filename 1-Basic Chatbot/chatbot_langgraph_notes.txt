@@ -1,0 +1,655 @@
+# LangGraph Chatbot + Tools + Memory + Streaming — Interview Notes
+
+## 1. What this notebook demonstrates
+
+This notebook builds a chatbot using **LangGraph** and progressively adds:
+
+1. Basic chatbot
+2. Tool calling
+3. ReAct-style agent loop
+4. Memory
+5. Streaming
+
+**Core idea:**
+
+`State → Nodes → Edges → Execution`
+
+LangGraph represents an LLM application as a **graph**, where nodes perform work and edges control the flow.
+
+---
+
+# PART 1 — Basic LangGraph Chatbot
+
+## 2. Imports
+
+```python
+from typing import Annotated
+from typing_extensions import TypedDict
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+```
+
+Important:
+
+* `StateGraph` → creates the graph.
+* `START` → graph entry point.
+* `END` → graph exit point.
+* `add_messages` → defines how messages are added to state.
+* `TypedDict` → defines the structure of the graph state.
+
+---
+
+## 3. Define State
+
+```python
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+```
+
+`State` is the **shared data structure** passed between graph nodes.
+
+Here, the state contains:
+
+```text
+messages → list of conversation messages
+```
+
+`add_messages` tells LangGraph to **append/merge messages instead of simply replacing the existing list**.
+
+### Interview point
+
+> **State = memory/data flowing through the graph.**
+
+---
+
+## 4. Create the LLM
+
+```python
+from langchain_groq import ChatGroq
+
+llm = ChatGroq(
+    model="llama3-8b-8192"
+)
+```
+
+Creates the Groq-hosted Llama model.
+
+The notebook also demonstrates:
+
+```python
+llm = init_chat_model("groq:llama3-8b-8192")
+```
+
+This provides a more generalized way to initialize a chat model.
+
+---
+
+## 5. Create Chatbot Node
+
+```python
+def chatbot(state: State):
+    return {
+        "messages": [
+            llm.invoke(state["messages"])
+        ]
+    }
+```
+
+A **node** is a function that performs work.
+
+Here:
+
+`State → LLM → New Message`
+
+The node receives the current state, sends the messages to the LLM, and returns the LLM's response.
+
+---
+
+## 6. Build the Graph
+
+```python
+graph_builder = StateGraph(State)
+
+graph_builder.add_node(
+    "llmchatbot",
+    chatbot
+)
+
+graph_builder.add_edge(
+    START,
+    "llmchatbot"
+)
+
+graph_builder.add_edge(
+    "llmchatbot",
+    END
+)
+
+graph = graph_builder.compile()
+```
+
+Graph:
+
+```text
+START
+  ↓
+LLM Chatbot
+  ↓
+ END
+```
+
+### Important concepts
+
+**Node** → performs an operation.
+
+**Edge** → controls where execution goes.
+
+**State** → carries data between nodes.
+
+**Compile** → converts the graph definition into an executable graph.
+
+---
+
+## 7. Invoke the Graph
+
+```python
+response = graph.invoke({
+    "messages": "Hi"
+})
+```
+
+Runs the graph synchronously.
+
+Then:
+
+```python
+response["messages"][-1].content
+```
+
+gets the content of the latest message.
+
+---
+
+# PART 2 — Tool Calling
+
+## 8. Create a Search Tool
+
+```python
+from langchain_tavily import TavilySearch
+
+tool = TavilySearch(
+    max_results=2
+)
+```
+
+Creates a web-search tool.
+
+The LLM can use this tool when it needs external/current information.
+
+---
+
+## 9. Create a Custom Tool
+
+```python
+def multiply(a: int, b: int) -> int:
+    """Multiply a and b"""
+    return a * b
+```
+
+This is a normal Python function that becomes a tool available to the LLM.
+
+It allows the model to perform an actual calculation instead of relying on its own generated reasoning.
+
+---
+
+## 10. Create Tool List
+
+```python
+tools = [tool, multiply]
+```
+
+The agent now has two tools:
+
+```text
+Agent
+ ├── Tavily Search
+ └── multiply()
+```
+
+---
+
+## 11. Bind Tools to the LLM
+
+```python
+llm_with_tool = llm.bind_tools(tools)
+```
+
+This tells the LLM:
+
+> These tools are available and can be called when necessary.
+
+**Important:** `bind_tools()` makes tools available to the model; it does not itself execute the tools.
+
+---
+
+# PART 3 — Tool-Calling Graph
+
+## 12. Tool Calling Node
+
+```python
+def tool_calling_llm(state: State):
+    return {
+        "messages": [
+            llm_with_tool.invoke(state["messages"])
+        ]
+    }
+```
+
+The LLM receives the conversation and decides whether it needs a tool.
+
+---
+
+## 13. ToolNode
+
+```python
+builder.add_node(
+    "tools",
+    ToolNode(tools)
+)
+```
+
+`ToolNode` is a prebuilt LangGraph node that **actually executes the requested tools**.
+
+So:
+
+**LLM decides → ToolNode executes**
+
+---
+
+## 14. Conditional Routing
+
+```python
+builder.add_conditional_edges(
+    "tool_calling_llm",
+    tools_condition
+)
+```
+
+`tools_condition` checks the latest LLM message.
+
+If it contains a tool call:
+
+```text
+LLM → Tools
+```
+
+If there is no tool call:
+
+```text
+LLM → END
+```
+
+Graph:
+
+```text
+START
+  ↓
+LLM
+  ↓
+tools_condition
+ ↙        ↘
+Tools     END
+```
+
+---
+
+# PART 4 — ReAct Agent Architecture
+
+## 15. The Important Change
+
+In the previous graph:
+
+```python
+builder.add_edge("tools", END)
+```
+
+After using a tool, the graph ended.
+
+For the ReAct-style architecture, the notebook changes this to:
+
+```python
+builder.add_edge(
+    "tools",
+    "tool_calling_llm"
+)
+```
+
+Now the tool result goes **back to the LLM**.
+
+Graph:
+
+```text
+START
+  ↓
+LLM
+  ↓
+Tool?
+ ↙   ↘
+No   Yes
+↓     ↓
+END  Tool
+      ↓
+     LLM
+      ↓
+   Tool?
+      ↓
+     ...
+```
+
+This creates an iterative **reason → act → observe → reason** loop.
+
+### Interview point
+
+This is the key idea behind a **ReAct-style agent**.
+
+The agent can perform multiple tool calls until it has enough information to answer.
+
+---
+
+# PART 5 — Memory
+
+## 16. Add Memory
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
+```
+
+`MemorySaver` stores graph checkpoints in memory.
+
+Then:
+
+```python
+graph = builder.compile(
+    checkpointer=memory
+)
+```
+
+The graph now has checkpoint-based state persistence.
+
+---
+
+## 17. Thread ID
+
+```python
+config = {
+    "configurable": {
+        "thread_id": "1"
+    }
+}
+```
+
+`thread_id` identifies a conversation/session.
+
+For example:
+
+```text
+Thread 1 → User A's conversation
+Thread 2 → User B's conversation
+```
+
+When the same thread ID is reused, LangGraph can access the stored state for that conversation.
+
+---
+
+## 18. Memory Example
+
+```python
+graph.invoke(
+    {"messages": "Hi my name is Krish"},
+    config=config
+)
+```
+
+Later:
+
+```python
+graph.invoke(
+    {"messages": "Hey what is my name"},
+    config=config
+)
+```
+
+Because both calls use:
+
+```text
+thread_id = "1"
+```
+
+the graph can access the previous conversation state.
+
+### Interview point
+
+> `thread_id` provides conversation/session identity, while the checkpointer stores the state associated with that thread.
+
+---
+
+# PART 6 — Streaming
+
+## 19. `.stream()`
+
+```python
+for chunk in graph_builder.stream(
+    {"messages": "..."},
+    config,
+    stream_mode="updates"
+):
+    print(chunk)
+```
+
+`stream()` allows you to receive graph execution results incrementally rather than waiting for the complete execution.
+
+---
+
+## 20. `stream_mode="updates"`
+
+```python
+stream_mode="updates"
+```
+
+Returns **state updates produced by each node**.
+
+Think:
+
+```text
+Node executed
+    ↓
+What changed?
+    ↓
+Stream the update
+```
+
+---
+
+## 21. `stream_mode="values"`
+
+```python
+stream_mode="values"
+```
+
+Streams the **full graph state** after each node executes.
+
+### Easy distinction
+
+**updates**
+
+→ What changed?
+
+**values**
+
+→ What is the complete state now?
+
+---
+
+## 22. Async Streaming
+
+```python
+async for event in graph_builder.astream_events(
+    {...},
+    config,
+    version="v2"
+):
+    print(event)
+```
+
+`astream_events()` provides asynchronous event-level streaming.
+
+Useful when building applications that need detailed real-time execution events.
+
+---
+
+# What to Remember for Interview
+
+## LangGraph Core
+
+**State**
+→ Data shared between nodes.
+
+**Node**
+→ Function that performs work.
+
+**Edge**
+→ Controls execution flow.
+
+**Conditional Edge**
+→ Chooses the next node based on state/result.
+
+**START**
+→ Entry point.
+
+**END**
+→ Exit point.
+
+**Compile**
+→ Turns the graph definition into an executable graph.
+
+---
+
+# Agent Architecture
+
+### Basic chatbot
+
+```text
+START → LLM → END
+```
+
+### Tool-calling agent
+
+```text
+START → LLM → Tool? → Tool → END
+```
+
+### ReAct-style agent
+
+```text
+START → LLM → Tool? → Tool → LLM → Tool? → ... → END
+```
+
+### Memory
+
+```text
+Graph
+  ↓
+Checkpointer
+  ↓
+Thread ID
+  ↓
+Persistent conversation state
+```
+
+---
+
+# Most Important Interview Differences
+
+### LangChain Chain vs LangGraph
+
+**LangChain Chain:**
+
+Usually represents a relatively fixed sequence:
+
+`Prompt → LLM → Parser`
+
+**LangGraph:**
+
+Represents a stateful workflow where execution can branch, loop, call tools, and maintain state.
+
+---
+
+### Tool vs ToolNode
+
+**Tool**
+
+→ Function/capability available to the LLM.
+
+**ToolNode**
+
+→ LangGraph node that executes the requested tool calls.
+
+---
+
+### `bind_tools()` vs `ToolNode`
+
+**`bind_tools()`**
+
+→ Tells the LLM which tools it can request.
+
+**`ToolNode()`**
+
+→ Actually executes those tools inside the graph.
+
+---
+
+### MemorySaver vs Thread ID
+
+**MemorySaver**
+
+→ Stores checkpoints/state.
+
+**Thread ID**
+
+→ Identifies which conversation's state should be used.
+
+---
+
+# Interview-Ready Explanation
+
+> "I built a stateful chatbot using LangGraph. The conversation is represented as a shared State containing messages. Nodes perform operations such as calling the LLM or executing tools, while edges control the workflow. I first built a basic LLM graph, then added Tavily search and a custom multiplication tool using tool calling. With conditional routing and a loop from the ToolNode back to the LLM, the graph behaves like a ReAct-style agent that can use multiple tools iteratively. I then added MemorySaver with thread IDs for conversation persistence and demonstrated synchronous and asynchronous streaming."
+
+## One-Line Memory Trick
+
+**`State → Node → Edge → Tool → Loop → Memory → Stream`**
+
+### The architecture to draw in an interview
+
+```text
+                    ┌──────────────┐
+                    │     LLM      │
+                    └──────┬───────┘
+                           │
+                    Tool required?
+                     /           \
+                   No             Yes
+                   ↓               ↓
+                  END          ToolNode
+                                   │
+                                   ↓
+                                  LLM
+                                   │
+                                  ...
+                           
+       State = messages
+       Memory = Checkpointer + Thread ID
+       Streaming = stream() / astream_events()
+```

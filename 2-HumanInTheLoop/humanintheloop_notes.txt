@@ -1,0 +1,430 @@
+# LangGraph Human-in-the-Loop — Interview Notes
+
+## 1. What this application does
+
+This example demonstrates **Human-in-the-Loop (HITL)** in LangGraph.
+
+The agent can:
+
+* Use **Tavily Search** for web search.
+* Ask a **human for assistance** when required.
+* Pause execution using `interrupt()`.
+* Resume execution using `Command(resume=...)`.
+
+**Flow:**
+
+`User → LLM → Tool Decision → Human Interrupt → Human Response → Resume → LLM → Final Answer`
+
+---
+
+## 2. Create the LLM
+
+```python
+from langchain.chat_models import init_chat_model
+
+llm = init_chat_model("groq:llama3-8b-8192")
+```
+
+Initializes the Groq-hosted Llama model.
+
+The LLM is responsible for deciding whether it needs to call one of the available tools.
+
+---
+
+## 3. Define Graph State
+
+```python
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+```
+
+The graph state contains the conversation messages.
+
+`add_messages` ensures new messages are added to the existing conversation state.
+
+**Remember:**
+
+> **State = data flowing through the LangGraph.**
+
+---
+
+## 4. Create the Human Assistance Tool
+
+```python
+@tool
+def human_assistance(query: str) -> str:
+    """Request assistance from a human."""
+    human_response = interrupt({"query": query})
+    return human_response["data"]
+```
+
+This is the most important part of the example.
+
+Normally, a tool executes automatically.
+
+Here, the tool calls:
+
+```python
+interrupt(...)
+```
+
+which **pauses the graph execution** and waits for human input.
+
+The human's response is later returned through:
+
+```python
+human_response["data"]
+```
+
+### Key idea
+
+```text
+Agent
+  ↓
+human_assistance()
+  ↓
+interrupt()
+  ↓
+⏸ PAUSE
+  ↓
+Human provides response
+  ↓
+Resume graph
+```
+
+---
+
+## 5. Create Tavily Search Tool
+
+```python
+tool = TavilySearch(max_results=2)
+```
+
+Creates a web-search tool that can retrieve up to 2 results.
+
+Now the agent has two tools:
+
+```python
+tools = [tool, human_assistance]
+```
+
+```text
+Agent
+ ├── Tavily Search
+ └── Human Assistance
+```
+
+---
+
+## 6. Bind Tools to the LLM
+
+```python
+llm_with_tools = llm.bind_tools(tools)
+```
+
+Makes both tools available to the LLM.
+
+**Important distinction:**
+
+`bind_tools()` → tells the LLM which tools it can request.
+
+`ToolNode` → actually executes the requested tools.
+
+---
+
+## 7. Create Chatbot Node
+
+```python
+def chatbot(state: State):
+    message = llm_with_tools.invoke(state["messages"])
+    return {"messages": [message]}
+```
+
+The chatbot node sends the current conversation to the LLM.
+
+The LLM can either:
+
+* Return a normal response, or
+* Request a tool call.
+
+---
+
+## 8. Create ToolNode
+
+```python
+tool_node = ToolNode(tools=tools)
+
+graph_builder.add_node(
+    "tools",
+    tool_node
+)
+```
+
+`ToolNode` executes the tool requested by the LLM.
+
+This includes both:
+
+* Tavily Search
+* Human Assistance
+
+If `human_assistance` is selected, the `interrupt()` pauses execution.
+
+---
+
+## 9. Conditional Routing
+
+```python
+graph_builder.add_conditional_edges(
+    "chatbot",
+    tools_condition
+)
+```
+
+`tools_condition` checks whether the LLM requested a tool.
+
+If no tool is requested:
+
+```text
+Chatbot → END
+```
+
+If a tool is requested:
+
+```text
+Chatbot → Tools
+```
+
+---
+
+## 10. Tool → Chatbot Loop
+
+```python
+graph_builder.add_edge(
+    "tools",
+    "chatbot"
+)
+```
+
+After the tool executes, its result goes back to the LLM.
+
+So the architecture becomes:
+
+```text
+START
+  ↓
+Chatbot
+  ↓
+Tool needed?
+ ↙        ↘
+No        Yes
+↓          ↓
+END      ToolNode
+           ↓
+        Chatbot
+           ↓
+          ...
+```
+
+This allows the agent to continue reasoning after receiving tool results.
+
+---
+
+## 11. Add Memory / Checkpointer
+
+```python
+memory = MemorySaver()
+
+graph = graph_builder.compile(
+    checkpointer=memory
+)
+```
+
+`MemorySaver` stores graph checkpoints.
+
+This is particularly important for HITL because the graph needs to remember its state while it is paused.
+
+---
+
+## 12. Thread ID
+
+```python
+config = {
+    "configurable": {
+        "thread_id": "1"
+    }
+}
+```
+
+The `thread_id` identifies the conversation/checkpoint.
+
+The same thread ID must be used when resuming the interrupted graph so LangGraph knows **which paused execution to continue**.
+
+---
+
+# 13. Run the Graph
+
+```python
+events = graph.stream(
+    {"messages": user_input},
+    config,
+    stream_mode="values"
+)
+```
+
+Starts graph execution.
+
+The user asks:
+
+> "Could you request assistance for me?"
+
+The LLM can decide to call:
+
+```text
+human_assistance
+```
+
+which reaches:
+
+```python
+interrupt({"query": query})
+```
+
+At this point, execution pauses.
+
+---
+
+# 14. Resume After Human Response
+
+The human provides a response:
+
+```python
+human_response = (
+    "We, the experts are here to help! We'd recommend you check out LangGraph..."
+)
+```
+
+Then:
+
+```python
+human_command = Command(
+    resume={"data": human_response}
+)
+```
+
+`Command(resume=...)` tells LangGraph:
+
+> Resume the previously interrupted graph and provide this data to the interrupted node.
+
+Then:
+
+```python
+events = graph.stream(
+    human_command,
+    config,
+    stream_mode="values"
+)
+```
+
+continues execution from where it was paused.
+
+---
+
+# What to Remember for Interview
+
+### 5 key concepts
+
+**1. `interrupt()`**
+
+→ Pauses graph execution and waits for external/human input.
+
+**2. `Command(resume=...)`**
+
+→ Resumes an interrupted graph with the provided data.
+
+**3. `MemorySaver`**
+
+→ Stores checkpoints/state so the graph can pause and later continue.
+
+**4. `thread_id`**
+
+→ Identifies the conversation/checkpoint being resumed.
+
+**5. `ToolNode`**
+
+→ Executes tools requested by the LLM.
+
+---
+
+# Most Important HITL Flow
+
+```text
+User
+ ↓
+LLM
+ ↓
+Decides Human Help Needed
+ ↓
+human_assistance Tool
+ ↓
+interrupt()
+ ↓
+⏸ GRAPH PAUSED
+ ↓
+Human Provides Response
+ ↓
+Command(resume=...)
+ ↓
+Graph Resumes
+ ↓
+LLM
+ ↓
+Final Response
+```
+
+---
+
+# Interview-Ready Explanation
+
+> "This example implements Human-in-the-Loop using LangGraph. The LLM has access to Tavily Search and a custom human-assistance tool. When the model decides that human input is required, the human-assistance tool calls `interrupt()`, which pauses graph execution. `MemorySaver` checkpoints the graph state and a `thread_id` identifies the conversation. Once the human provides a response, `Command(resume=...)` resumes the same graph execution, allowing the LLM to continue from where it stopped."
+
+## One-Line Memory Trick
+
+**`interrupt() = pause`**
+
+**`MemorySaver = remember`**
+
+**`thread_id = identify`**
+
+**`Command(resume) = continue`**
+
+### HITL architecture to draw in an interview
+
+```text
+             ┌──────────────┐
+             │     LLM      │
+             └──────┬───────┘
+                    ↓
+               Tool needed?
+                /        \
+              No          Yes
+              ↓            ↓
+             END       ToolNode
+                           ↓
+                    Human Assistance
+                           ↓
+                      interrupt()
+                           ↓
+                     ⏸ PAUSED
+                           ↓
+                    Human Response
+                           ↓
+                  Command(resume)
+                           ↓
+                          LLM
+                           ↓
+                         Answer
+```
+
+**Core interview distinction:**
+
+> A normal agent is fully autonomous; a **Human-in-the-Loop agent deliberately introduces a human approval/input point into the execution workflow**.

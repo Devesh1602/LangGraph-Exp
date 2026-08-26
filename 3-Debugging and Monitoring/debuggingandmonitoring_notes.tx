@@ -1,0 +1,330 @@
+# LangChain Debugging & Monitoring — Interview Notes
+
+For interviews, think of it as:
+
+> **Debugging = finding why the LLM application is behaving incorrectly.**
+> **Monitoring = continuously tracking how the application behaves in production.**
+
+---
+
+## 1. LangSmith — the main tool
+
+For modern LangChain applications, **LangSmith** is the primary observability/debugging platform.
+
+It helps you inspect:
+
+* LLM calls
+* Prompts
+* Outputs
+* Tool calls
+* Retrieval results
+* Latency
+* Token usage
+* Errors
+* Complete execution traces
+
+### Basic architecture
+
+```text
+User
+ ↓
+LangChain / LangGraph
+ ↓
+┌─────────────────────┐
+│     LangSmith       │
+│  Traces / Metrics   │
+└─────────────────────┘
+ ↓
+LLM / Tools / Retriever
+```
+
+---
+
+## 2. What is Tracing?
+
+A **trace** represents the complete execution of a request.
+
+For example:
+
+```text
+User Question
+      ↓
+Retriever
+      ↓
+Documents
+      ↓
+Prompt
+      ↓
+LLM
+      ↓
+Tool Call
+      ↓
+Final Answer
+```
+
+LangSmith lets you inspect each step.
+
+You can see:
+
+```text
+Input
+ ↓
+Retriever → 320 ms
+ ↓
+LLM → 1.8 sec
+ ↓
+Tool → 500 ms
+ ↓
+Final response
+```
+
+This is extremely useful when debugging agents.
+
+---
+
+## 3. Debugging Example
+
+Suppose your RAG application gives:
+
+> “I don't know.”
+
+You need to determine **where the problem occurred**.
+
+Trace:
+
+```text
+Question
+   ↓
+Retriever
+   ↓
+❌ Wrong documents
+   ↓
+LLM
+   ↓
+"I don't know"
+```
+
+The LLM may actually be working correctly.
+
+The real problem is:
+
+> **Retrieval quality is poor.**
+
+Alternatively:
+
+```text
+Question
+   ↓
+Retriever
+   ↓
+✅ Correct documents
+   ↓
+Prompt
+   ↓
+❌ Context not passed correctly
+   ↓
+LLM
+   ↓
+"I don't know"
+```
+
+Tracing helps identify the exact failure point.
+
+---
+
+# 4. What Can You Monitor?
+
+### Performance
+
+* Latency
+* Response time
+* Throughput
+* Error rate
+
+### LLM metrics
+
+* Token usage
+* Input/output tokens
+* Model
+* Cost
+
+### RAG metrics
+
+* Retrieved documents
+* Number of documents
+* Retrieval relevance
+* Context quality
+
+### Agent metrics
+
+* Tool calls
+* Number of iterations
+* Agent decisions
+* Failed tool calls
+
+---
+
+# 5. Environment Setup
+
+A typical LangSmith setup uses environment variables:
+
+```python
+import os
+
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_API_KEY"] = "your-api-key"
+os.environ["LANGSMITH_PROJECT"] = "my-rag-project"
+```
+
+Then your LangChain/LangGraph execution can be traced.
+
+---
+
+# 6. Debugging an Agent
+
+Suppose an agent is stuck:
+
+```text
+Agent
+ ↓
+Search Tool
+ ↓
+Agent
+ ↓
+Search Tool
+ ↓
+Agent
+ ↓
+Search Tool
+ ↓
+...
+```
+
+This could indicate an **agent loop**.
+
+With tracing, you can inspect:
+
+* What did the LLM decide?
+* Why did it select the tool?
+* What did the tool return?
+* What did the LLM receive afterward?
+* Why did it call the tool again?
+
+This is much better than simply looking at the final answer.
+
+---
+
+# 7. Logging vs Tracing vs Monitoring
+
+Very common interview question.
+
+| Concept        | Purpose                                        |
+| -------------- | ---------------------------------------------- |
+| **Logging**    | Record events/messages                         |
+| **Tracing**    | Follow one request across multiple components  |
+| **Monitoring** | Track application health/performance over time |
+
+Example:
+
+```text
+Logging:
+"Retriever returned 5 documents"
+
+Tracing:
+User → Retriever → LLM → Tool → LLM
+
+Monitoring:
+Average latency = 2.4 sec
+Error rate = 1.2%
+Cost = $X/day
+```
+
+---
+
+# 8. Evaluation
+
+Monitoring tells you:
+
+> **“Is the system running?”**
+
+Evaluation asks:
+
+> **“Is the system producing good answers?”**
+
+For an RAG application, you might evaluate:
+
+```text
+Question
+   ↓
+Retrieved Context
+   ↓
+Answer
+```
+
+Metrics can include:
+
+* Answer correctness
+* Relevance
+* Faithfulness
+* Context relevance
+* Hallucination rate
+
+LangSmith can also be used for **datasets, experiments, evaluations, and comparing different versions of prompts/models.**
+
+---
+
+# 9. Production Architecture
+
+A strong interview architecture:
+
+```text
+                  USER
+                    ↓
+                 FastAPI
+                    ↓
+             LangChain / Graph
+                    ↓
+        ┌───────────┴───────────┐
+        ↓                       ↓
+    Retriever                 Agent
+        ↓                       ↓
+    Vector DB                 Tools
+        ↓                       ↓
+        └───────────┬───────────┘
+                    ↓
+                   LLM
+                    ↓
+                 Response
+
+                    │
+                    │ traces
+                    ↓
+              ┌─────────────┐
+              │ LangSmith   │
+              ├─────────────┤
+              │ Tracing     │
+              │ Monitoring  │
+              │ Evaluation  │
+              │ Debugging   │
+              └─────────────┘
+```
+
+---
+
+## 10. Interview Answer
+
+If asked:
+
+**“How do you debug and monitor a LangChain application?”**
+
+Say:
+
+> “I would use LangSmith for observability. I enable tracing to capture the complete execution flow, including prompts, LLM calls, retriever results, tool calls, outputs, latency, token usage, and errors. For debugging, I inspect individual runs and traces to identify whether the problem is in retrieval, prompting, tool execution, or the model. For production monitoring, I track latency, error rates, token usage, cost, and application-specific metrics. I would also use evaluation datasets to continuously measure answer quality and detect regressions.”
+
+### Remember
+
+**LangSmith = Trace + Debug + Monitor + Evaluate**
+
+And the most important debugging mindset is:
+
+> **Don't debug only the final answer — trace every step that produced it.**
