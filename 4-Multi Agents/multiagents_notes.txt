@@ -1,0 +1,644 @@
+# Multi-Agent AI with LangGraph — Interview Notes
+
+## 1. What this notebook demonstrates
+
+This notebook shows **three levels of multi-agent architecture**:
+
+1. **Simple Multi-Agent** → Researcher → Writer
+2. **Supervisor Multi-Agent** → Supervisor dynamically routes Researcher → Analyst → Writer
+3. **Hierarchical Multi-Agent** → Team leaders manage specialized agents
+
+The important idea is:
+
+> Instead of one agent doing everything, multiple specialized agents collaborate through shared state.
+
+---
+
+# PART 1 — Simple Multi-Agent
+
+## 2. Define State
+
+```python
+class AgentState(MessagesState):
+    next_agent: str
+```
+
+`AgentState` contains:
+
+* `messages` → inherited from `MessagesState`
+* `next_agent` → identifies which agent should execute next.
+
+**Remember:**
+
+> **State = shared information between agents.**
+
+---
+
+## 3. Create Tools
+
+### Web Search
+
+```python
+@tool
+def search_web(query: str) -> str:
+    search = TavilySearchResults(max_results=3)
+    results = search.invoke(query)
+    return str(results)
+```
+
+The Researcher can use Tavily to search the web.
+
+### Summary Tool
+
+```python
+@tool
+def write_summary(content: str) -> str:
+    summary = f"Summary of findings:\n\n{content[:500]}..."
+    return summary
+```
+
+Creates a simple summary from supplied content.
+
+**Important:** In the actual simple workflow below, `write_summary` is defined but is not connected to the graph's active routing logic.
+
+---
+
+# 4. Create LLM
+
+```python
+llm = init_chat_model(
+    "groq:llama-3.1-8b-instant"
+)
+```
+
+Creates the Groq-hosted Llama model used by the agents.
+
+---
+
+# 5. Researcher Agent
+
+```python
+def researcher_agent(state: AgentState):
+```
+
+The Researcher:
+
+1. Reads the current messages.
+2. Gets a research-oriented system instruction.
+3. Binds the web-search tool.
+4. Calls the LLM.
+5. Returns the response.
+6. Sets `next_agent = "writer"`.
+
+Flow:
+
+```text
+User Question
+     ↓
+Researcher
+     ↓
+Tavily Search if needed
+     ↓
+Research Result
+     ↓
+Writer
+```
+
+---
+
+# 6. Writer Agent
+
+```python
+def writer_agent(state: AgentState):
+```
+
+The Writer receives the conversation and asks the LLM to create a concise summary.
+
+It returns:
+
+```python
+"next_agent": "end"
+```
+
+So the simple workflow is fixed:
+
+```text
+START
+  ↓
+Researcher
+  ↓
+Writer
+  ↓
+END
+```
+
+### Interview point
+
+This is a **multi-agent workflow**, but the routing is predetermined.
+
+The Researcher always goes to the Writer.
+
+---
+
+# 7. Build Simple Graph
+
+```python
+workflow = StateGraph(MessagesState)
+
+workflow.add_node("researcher", researcher_agent)
+workflow.add_node("writer", writer_agent)
+
+workflow.set_entry_point("researcher")
+
+workflow.add_edge("researcher", "writer")
+workflow.add_edge("writer", END)
+
+final_workflow = workflow.compile()
+```
+
+The graph is:
+
+```text
+START → Researcher → Writer → END
+```
+
+---
+
+# PART 2 — Supervisor Multi-Agent
+
+This is the more important architecture for interviews.
+
+## 8. Define Supervisor State
+
+```python
+class SupervisorState(MessagesState):
+    next_agent: str = ""
+    research_data: str = ""
+    analysis: str = ""
+    final_report: str = ""
+    task_complete: bool = False
+    current_task: str = ""
+```
+
+The shared state now contains specialized fields:
+
+* `research_data` → Researcher's output.
+* `analysis` → Analyst's output.
+* `final_report` → Writer's final report.
+* `current_task` → original task.
+* `next_agent` → next agent to execute.
+* `task_complete` → whether work is finished.
+
+**Interview point:**
+
+> The agents communicate through shared graph state rather than directly calling each other.
+
+---
+
+# 9. Supervisor
+
+```python
+def supervisor_agent(state: SupervisorState):
+```
+
+The Supervisor decides **which agent should work next**.
+
+Available agents:
+
+```text
+Researcher
+Analyst
+Writer
+```
+
+The supervisor prompt checks:
+
+```text
+Has research?
+Has analysis?
+Has report?
+```
+
+Then asks the LLM to choose:
+
+```text
+researcher
+analyst
+writer
+DONE
+```
+
+---
+
+# 10. Supervisor Decision Logic
+
+```python
+if "done" in decision_text or has_report:
+    next_agent = "end"
+
+elif "researcher" in decision_text or not has_research:
+    next_agent = "researcher"
+
+elif "analyst" in decision_text or (has_research and not has_analysis):
+    next_agent = "analyst"
+
+elif "writer" in decision_text or (has_analysis and not has_report):
+    next_agent = "writer"
+```
+
+This combines the LLM's decision with state-based checks.
+
+### Basic workflow
+
+```text
+             Supervisor
+            /     |     \
+           ↓      ↓      ↓
+     Researcher Analyst Writer
+           ↓      ↓      ↓
+             Supervisor
+                  ↓
+                 END
+```
+
+The Supervisor acts as the **orchestrator/router**.
+
+---
+
+# 11. Researcher Agent
+
+```python
+def researcher_agent(state: SupervisorState):
+```
+
+The Researcher uses the LLM to gather information about the task.
+
+It stores the result in:
+
+```python
+"research_data": research_data
+```
+
+and routes back to:
+
+```python
+"next_agent": "supervisor"
+```
+
+So:
+
+```text
+Supervisor
+    ↓
+Researcher
+    ↓
+Research Data
+    ↓
+Supervisor
+```
+
+---
+
+# 12. Analyst Agent
+
+```python
+def analyst_agent(state: SupervisorState):
+```
+
+The Analyst reads:
+
+```python
+research_data
+```
+
+and produces:
+
+* Key insights
+* Strategic implications
+* Risks/opportunities
+* Recommendations
+
+The result is stored in:
+
+```python
+"analysis": analysis
+```
+
+Then it returns control to the Supervisor.
+
+```text
+Supervisor
+    ↓
+Analyst
+    ↓
+Analysis
+    ↓
+Supervisor
+```
+
+---
+
+# 13. Writer Agent
+
+```python
+def writer_agent(state: SupervisorState):
+```
+
+The Writer uses:
+
+* `current_task`
+* `research_data`
+* `analysis`
+
+to create the final executive report.
+
+The report contains:
+
+1. Executive Summary
+2. Key Findings
+3. Analysis & Insights
+4. Recommendations
+5. Conclusion
+
+The final report is stored in:
+
+```python
+"final_report": final_report
+```
+
+and:
+
+```python
+"task_complete": True
+```
+
+---
+
+# 14. Router Function
+
+```python
+def router(state: SupervisorState):
+```
+
+The router looks at:
+
+```python
+state["next_agent"]
+```
+
+and decides where the graph should go.
+
+Possible destinations:
+
+```text
+supervisor
+researcher
+analyst
+writer
+END
+```
+
+This separates **decision-making from graph routing**.
+
+### Important distinction
+
+**Supervisor**
+
+→ decides what should happen next.
+
+**Router**
+
+→ translates that decision into a graph edge.
+
+---
+
+# 15. Build Supervisor Graph
+
+```python
+workflow = StateGraph(SupervisorState)
+```
+
+Add nodes:
+
+```python
+workflow.add_node("supervisor", supervisor_agent)
+workflow.add_node("researcher", researcher_agent)
+workflow.add_node("analyst", analyst_agent)
+workflow.add_node("writer", writer_agent)
+```
+
+Set entry:
+
+```python
+workflow.set_entry_point("supervisor")
+```
+
+Then conditional routing is added for every node.
+
+---
+
+# 16. Supervisor Architecture
+
+The resulting architecture is:
+
+```text
+                    START
+                      ↓
+                 Supervisor
+                ↙    ↓     ↘
+        Researcher  Analyst  Writer
+             ↓        ↓        ↓
+             └────────┴────────┘
+                      ↓
+                  Supervisor
+                      ↓
+                     END
+```
+
+The actual path is usually:
+
+```text
+START
+ ↓
+Supervisor
+ ↓
+Researcher
+ ↓
+Supervisor
+ ↓
+Analyst
+ ↓
+Supervisor
+ ↓
+Writer
+ ↓
+Supervisor
+ ↓
+END
+```
+
+---
+
+# 17. Run the Multi-Agent System
+
+```python
+response = graph.invoke(
+    HumanMessage(
+        content="What are the benefits and risks of AI in healthcare?"
+    )
+)
+```
+
+The Supervisor receives the task and coordinates the agents.
+
+Finally:
+
+```python
+response["final_report"]
+```
+
+returns the completed report.
+
+---
+
+# Simple vs Supervisor Multi-Agent
+
+| Simple Multi-Agent         | Supervisor Multi-Agent     |
+| -------------------------- | -------------------------- |
+| Fixed routing              | Dynamic routing            |
+| Researcher → Writer        | Supervisor decides         |
+| Less flexible              | More flexible              |
+| Simple workflow            | Stateful orchestration     |
+| Good for predictable tasks | Good for complex workflows |
+
+### Interview answer
+
+> "In a simple multi-agent workflow, agents can follow a predefined sequence. In a supervisor architecture, a dedicated supervisor dynamically decides which specialized agent should execute next based on the current state."
+
+---
+
+# Multi-Agent vs Single Agent
+
+### Single Agent
+
+```text
+User
+ ↓
+One Agent
+ ↓
+Tools
+ ↓
+Answer
+```
+
+### Multi-Agent
+
+```text
+             Supervisor
+            /     |     \
+           ↓      ↓      ↓
+     Researcher Analyst Writer
+```
+
+Each agent has a **specific responsibility**.
+
+### Why use multiple agents?
+
+* Separation of responsibilities
+* Easier specialization
+* Better organization of complex workflows
+* Independent prompts/logic for different tasks
+* More controllable orchestration
+
+---
+
+# What to Remember for Interview
+
+## Core Components
+
+### `MessagesState`
+
+→ Stores conversation messages.
+
+### `SupervisorState`
+
+→ Shared state containing messages + task-specific outputs.
+
+### Researcher
+
+→ Gathers information.
+
+### Analyst
+
+→ Analyzes research.
+
+### Writer
+
+→ Creates final report.
+
+### Supervisor
+
+→ Decides which agent works next.
+
+### Router
+
+→ Routes graph execution according to `next_agent`.
+
+---
+
+# Most Important Interview Concept
+
+### Supervisor vs Router
+
+**Supervisor = Decision Maker**
+
+> "Who should work next?"
+
+**Router = Graph Controller**
+
+> "Send execution to that node."
+
+---
+
+# Interview-Ready Explanation
+
+> "This notebook demonstrates multi-agent orchestration using LangGraph. In the simple architecture, a Researcher performs research and the Writer creates a summary through a fixed Researcher-to-Writer workflow. The supervisor architecture is more flexible: a Supervisor LLM examines the shared state and decides whether the Researcher, Analyst, or Writer should execute next. Each agent writes its results into the shared state, and control returns to the Supervisor until the task is complete. This creates a stateful, dynamically routed multi-agent workflow."
+
+## One-Line Memory Trick
+
+**`Supervisor → Research → Analyze → Write → Supervisor → END`**
+
+### The 6 things to memorize
+
+```text
+State       → Shared information
+Agent       → Specialized worker
+Supervisor  → Decides next worker
+Router      → Controls graph path
+LangGraph   → Orchestrates workflow
+LLM         → Provides reasoning/generation
+```
+
+## Interview Architecture to Draw
+
+```text
+                         ┌─────────────┐
+                         │ Supervisor  │
+                         └──────┬──────┘
+                                │
+              ┌─────────────────┼─────────────────┐
+              ↓                 ↓                 ↓
+        ┌──────────┐      ┌──────────┐      ┌──────────┐
+        │Researcher│      │ Analyst  │      │  Writer  │
+        └────┬─────┘      └────┬─────┘      └────┬─────┘
+             │                 │                 │
+             └─────────────────┴─────────────────┘
+                               ↓
+                          Shared State
+                               ↓
+                          Supervisor
+                               ↓
+                              END
+```
+
+**One code-quality point to remember:** In the simple architecture, `execute_tools()` is defined but never added as a graph node, so it is not actually part of `final_workflow`. Also, the simple graph is created with `StateGraph(MessagesState)` even though the custom `AgentState` is defined; the custom `next_agent` field therefore isn't represented in that graph's declared state.

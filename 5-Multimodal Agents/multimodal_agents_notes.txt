@@ -1,0 +1,4 @@
+Multimodal AI refers to artificial intelligence systems that process, integrate, and reason across multiple types of data—known as modalities—such as text, images, audio, video, and sensor signals, within a single model architecture. 
+Unlike traditional unimodal AI, which handles only one data type, multimodal AI combines these inputs to form a comprehensive, context-aware understanding of complex scenarios, mimicking human sensory integration. 
+CLIP (Contrastive Language-Image Pretraining) is a foundational multimodal model developed by OpenAI in 2021 that learns to associate images with their corresponding textual descriptions by mapping both modalities into a shared embedding space. 
+CLIP actually consists of two models trained in parallel. A 12-layer text transformer for building text embeddings and a ResNet or vision transformer (ViT) for building image embeddings

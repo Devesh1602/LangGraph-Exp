@@ -1,0 +1,73 @@
+## LLM Hallucinations
+
+**LLM hallucination** is when an LLM generates information that **sounds confident and believable but is factually incorrect, made up, or unsupported by the available information.**
+
+### Simple example
+
+User asks:
+
+> "Who won the 2026 XYZ AI Championship?"
+
+If the event doesn't exist, an LLM might respond:
+
+> "The 2026 XYZ AI Championship was won by ABC Technologies."
+
+That's a **hallucination** because the model generated a plausible-sounding answer without factual basis.
+
+### Why do hallucinations happen?
+
+LLMs fundamentally predict the **most likely next tokens** based on patterns learned during training. They don't inherently have a database of guaranteed facts.
+
+Common causes:
+
+1. **Missing knowledge** – The model doesn't know the answer.
+2. **Ambiguous questions** – The prompt can be interpreted in multiple ways.
+3. **Outdated information** – The model's knowledge may not include recent events.
+4. **Poor/insufficient context** – The required information wasn't provided.
+5. **Prompt ambiguity** – The model tries to satisfy the request even when information is unavailable.
+6. **Generated reasoning** – The model can produce plausible but incorrect reasoning or conclusions.
+
+### How to reduce hallucinations
+
+**1. RAG (Retrieval-Augmented Generation)**
+
+```text
+User Question
+      ↓
+Retrieve relevant documents
+      ↓
+Relevant Context
+      ↓
+LLM
+      ↓
+Grounded Answer
+```
+
+Instead of asking the LLM to rely only on its internal knowledge, give it relevant documents/context.
+
+**2. Tool calling**
+
+Let the LLM use reliable external tools:
+
+* Search engines
+* Databases
+* APIs
+* Calculators
+* Enterprise systems
+
+**3. Good prompting**
+
+Tell the model:
+
+> "Answer only using the provided context. If the answer isn't available, say you don't know."
+
+**4. Validation / Guardrails**
+
+Use another model, rules, or application logic to verify the generated response.
+
+### Interview answer
+
+> **LLM hallucination is the generation of plausible but incorrect, fabricated, or unsupported information by a language model. It commonly occurs when the model lacks reliable context or knowledge but still attempts to provide an answer. We can reduce hallucinations using RAG, tool calling, better prompting, grounding, validation, and guardrails.**
+
+**Easy way to remember:**
+**Hallucination = Confident answer + No factual grounding.**
